@@ -69,63 +69,46 @@ function parseBool(value) {
 }
 
 var conversions = {'DT_FLOAT': parseFloat, 'DT_INT32': parseInt, 'DT_BOOL': parseBool, 'DT_STRING': String};
+var default_values = {'DT_FLOAT': 0.0, 'DT_INT32': 0, 'DT_BOOL': false, 'DT_STRING': ''};
 
 function cast_payload(r, json) {
     var payload = JSON.parse(json);
-    var payload_with_cast = {};
+    var payload_with_cast = {"instances": []};
+
+    var metadata = JSON.parse(r.variables.tfs_metadata);
+
+    r.log('-------> TFS METADATA:\n' + JSON.stringify(metadata));
+
+    var metadata_inputs = metadata['metadata']['signature_def']['signature_def']['serving_default']['inputs'];
+
+    var keys = Object.keys(metadata_inputs);
+
+    payload["instances"].forEach(function (instance, instance_index) {
+        var new_instance = {};
+        keys.forEach(function (name, index) {
+            var dtype = metadata_inputs[name]['dtype'];
+
+            if (name in instance) {
+                var value = instance[name];
+
+                new_instance[name] = conversions[dtype](value);
 
 
-    r.log('-------> r.variables.metadata_inputs');
-    r.log('+++++' + JSON.stringify(r.variables.metadata_inputs));
+                r.log('-------> CASTING  FIELD ' + name + ' previous: ' + value + ' ,current: ' + new_instance[name]);
+            } else {
+                new_instance[name] = default_values[dtype];
 
-    var keys = Object.keys(r.variables.metadata_inputs);
-
-
-    r.log('-------> keys');
-    r.log(JSON.stringify(keys));
-
-    keys.forEach(function (name, index) {
-        if (name in payload) {
-            var value = payload[name];
-            var dtype = r.variables.metadata_inputs[name]['dtype'];
-
-            payload_with_cast[name] = conversions[dtype](value);
-        } else {
-
-            payload_with_cast[name] = null;
-        }
+                r.log('-------> CREATING FIELD ' + name + ' with default: ' + new_instance[name]);
+            }
+        });
+        payload_with_cast["instances"].push(new_instance);
     });
-    r.log('-------> payload_with_cast');
-    r.log(JSON.stringify(payload_with_cast));
+
+    r.log('-------> original payload\n' + JSON.stringify(payload));
+
+    r.log('-------> final request to TFS\n' + JSON.stringify(payload_with_cast));
+
     return JSON.stringify(payload_with_cast);
-}
-
-function tfs_metadata_request(r, json) {
-    var attributes = parse_custom_attributes(r);
-
-    var uri = tfs_base_uri + 'model/metadata';
-
-    r.log('-------> METADATA URI: ' + uri);
-
-    var options = {method: 'GET'};
-
-    function callback (reply) {
-        r.log('-------> callback');
-
-        var response = JSON.parse(reply.responseBody);
-
-        r.log('-------> response');
-        r.log(response);
-
-        var metadata_inputs = response['metadata']['signature_def']['signature_def']['serving_default']['inputs'];
-
-        r.log('-------> metadata_inputs');
-        r.log(metadata_inputs);
-
-        r.return(reply.status, metadata_inputs);
-    }
-
-    r.subrequest(uri, options, callback);
 }
 
 function tfs_json_request(r, json) {

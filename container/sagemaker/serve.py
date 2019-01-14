@@ -10,18 +10,20 @@
 # distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
-
 import logging
 import os
 import re
 import signal
 import subprocess
+import time
+from urllib import request
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
 
 class ServiceManager(object):
+
     def __init__(self):
         self._state = 'initializing'
         self._nginx = None
@@ -30,6 +32,7 @@ class ServiceManager(object):
         self._nginx_http_port = os.environ.get('SAGEMAKER_BIND_TO_PORT', '8080')
         self._nginx_loglevel = os.environ.get('SAGEMAKER_TFS_NGINX_LOGLEVEL', 'error')
         self._tfs_default_model_name = os.environ.get('SAGEMAKER_TFS_DEFAULT_MODEL_NAME', None)
+        self._tfs_metadata = None
 
         if 'SAGEMAKER_SAFE_PORT_RANGE' in os.environ:
             port_range = os.environ['SAGEMAKER_SAFE_PORT_RANGE']
@@ -127,7 +130,8 @@ class ServiceManager(object):
 
     def _start_nginx(self):
         self._log_version('/usr/sbin/nginx -V', 'nginx version info:')
-        p = subprocess.Popen('/usr/sbin/nginx -c /sagemaker/nginx.conf'.split())
+        p = subprocess.Popen('/usr/sbin/nginx -c /sagemaker/nginx.conf'.split(),
+                             env={'TFS_MODEL_METADATA': self._tfs_metadata})
         log.info('started nginx (pid: %d)', p.pid)
         self._nginx = p
 
@@ -155,15 +159,40 @@ class ServiceManager(object):
         self._state = 'stopped'
         log.info('stopped')
 
+    def _read_metadata(self):
+        seconds = 60
+        for i in range(seconds):
+            try:
+                self._tfs_metadata = self._request_metadata()
+
+                log.info('----------------------- MODEL METADATA -----------------------')
+                log.info(self._tfs_metadata)
+                log.info('-------------------------------------------------------------')
+
+            except Exception:
+                log.info('TFS needs more time to load the model, sleeping for one second.')
+                pass
+                time.sleep(1)
+
+    def _request_metadata(self):
+        req = request.Request('http://localhost:8501/v1/models/model/metadata')
+        response = request.urlopen(req)
+        data = response.read()
+        encoding = response.info().get_content_charset('utf-8')
+        return data.decode(encoding)
+
     def start(self):
         log.info('starting services')
         self._state = 'starting'
         signal.signal(signal.SIGTERM, self._stop)
 
         self._create_tfs_config()
-        self._create_nginx_config()
 
         self._start_tfs()
+
+        self._read_metadata()
+
+        self._create_nginx_config()
         self._start_nginx()
         self._state = 'started'
 
